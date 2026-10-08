@@ -24,10 +24,14 @@ class SourceConfig:
 class PaperConfig:
     warp_width: int = 1240  # A4 @ 150 dpi: precision is ample (0.17 mm/px),
     warp_height: int = 1754  # and it keeps a pipeline step ~23 ms instead of ~100
-    detect_interval_s: float = 2.0
+    detect_interval_s: float = 0.5
     min_area_frac: float = 0.05
     track_flow: bool = True
-    min_brightness: float = 90.0  # mean gray inside quad; rejects covered/dark lenses
+    min_brightness: float = 140.0  # mean gray inside quad; rejects covered/dark lenses
+    accept_brightness: float = 170.0  # a far-off quad is trusted only if it is
+    # paper-white (rejects glossy desk / pad quads found while the paper is covered)
+    max_detect_jump_px: float = 150.0  # corner jump vs tracked quad that still counts
+    # as "same paper" without a brightness check (partial quads fail this)
     width_mm: float = 210.0
     height_mm: float = 297.0
 
@@ -61,6 +65,11 @@ class TipConfig:
     min_taper_ratio: float = 1.15  # ends must differ in width: kills margin lines
     min_confidence: float = 0.35
     detect_scale: float = 0.5  # run detection on a scaled warp (speed vs precision)
+    border_margin_px: float = 12.0  # reject blobs clipped by the warp border:
+    # desk/pen/hand slivers beyond an imperfect paper quad land exactly there
+    border_evidence_rb: int = 100  # exception: a border-clipped blob whose pixels
+    # carry (r-b) above this is real pen (orange barrel / pink marker); desk and
+    # shadow slivers have no red-blue contrast and stay rejected
 
 
 @dataclass

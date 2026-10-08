@@ -12,10 +12,12 @@
   "paper": {
     "warp_width": 1240,
     "warp_height": 1754,
-    "detect_interval_s": 2.0,
+    "detect_interval_s": 0.5,
     "min_area_frac": 0.05,
     "track_flow": true,
-    "min_brightness": 90.0,
+    "min_brightness": 140.0,
+    "accept_brightness": 170.0,
+    "max_detect_jump_px": 150.0,
     "width_mm": 210.0,
     "height_mm": 297.0
   },
@@ -33,7 +35,9 @@
     "min_solidity": 0.5,
     "min_taper_ratio": 1.15,
     "min_confidence": 0.35,
-    "detect_scale": 0.5
+    "detect_scale": 0.5,
+    "border_margin_px": 12.0,
+    "border_evidence_rb": 100
   },
   "filter": {
     "min_cutoff": 1.0,

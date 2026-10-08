@@ -41,7 +41,8 @@ def test_order_corners_shuffle():
 def test_detect_paper():
     quad = detect_paper(scene())
     assert quad is not None
-    assert np.allclose(quad, GT, atol=3.0)
+    # tolerance includes the deliberate ~3 px inward bias of the bright mask
+    assert np.allclose(quad, GT, atol=5.0)
 
 
 def test_detect_paper_no_paper():
@@ -86,7 +87,8 @@ def test_tracker_detect_then_track():
     st1 = tracker.update(scene(quad=gt1), t=0.05)
     assert st1 is not None
     assert st1.method == "track"
-    assert np.allclose(st1.corners, gt1, atol=4.0)
+    # flow carries detect's deliberate ~3 px inward bias along with it
+    assert np.allclose(st1.corners, gt1, atol=6.0)
     assert tracker.detect_count == 1
 
 
@@ -107,7 +109,7 @@ def test_tracker_periodic_redetect():
     quad = translated(GT, 5, 5)
     st = tracker.update(scene(quad=quad), t=0.2)
     assert st is not None and st.method == "detect"
-    assert np.allclose(st.corners, quad, atol=3.0)
+    assert np.allclose(st.corners, quad, atol=5.0)
     assert tracker.detect_count == 2
 
 
@@ -122,3 +124,38 @@ def test_tracker_survives_missed_redetect(monkeypatch):
     st = tracker.update(scene(quad=quad), t=1.0)
     assert st is not None and st.method == "track"
     assert np.allclose(st.corners, quad, atol=4.0)
+
+
+def test_far_dim_redetect_rejected_while_tracking(monkeypatch):
+    """A bright-desk/pad quad far from the tracked paper must not hijack it."""
+    import paperpen.calibrate.paper as paper_mod
+
+    tracker = PaperTracker(PaperConfig(detect_interval_s=0.0))
+    assert tracker.update(scene(), t=0.0) is not None
+    far = translated(GT, 400, 0)  # lands on the dark desk in scene()
+    monkeypatch.setattr(paper_mod, "detect_paper", lambda *a, **k: far)
+    st = tracker.update(scene(), t=0.1)
+    assert st is not None and st.method == "track"
+    assert np.allclose(st.corners, GT, atol=4.0)
+    assert tracker.detect_count == 1  # the far quad was not accepted
+
+
+def test_accept_detect_rules():
+    from paperpen.calibrate.paper import PaperState, compute_homography
+
+    tracker = PaperTracker(PaperConfig())
+    tracker.state = PaperState(
+        corners=GT.astype(np.float32),
+        homography=compute_homography(GT, 400, 566),
+        method="detect",
+        t=0.0,
+    )
+    near = (GT + np.array([100, 0], np.float32)).astype(np.float32)
+    far = (GT + np.array([400, 0], np.float32)).astype(np.float32)
+    gray_dim = np.full((480, 640), 60, np.uint8)
+    gray_paper = np.full((480, 640), 235, np.uint8)
+    assert tracker._accept_detect(near, gray_dim)  # near the track: trusted
+    assert not tracker._accept_detect(far, gray_dim)  # far and not paper-white
+    assert tracker._accept_detect(far, gray_paper)  # far but unmistakably paper
+    tracker.state = None
+    assert tracker._accept_detect(far, gray_dim)  # no state: lock anything

@@ -46,6 +46,10 @@ def detect_paper(
     for mask in (binary, 255 - binary):
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+        # Bias the quad inward ~3 px: glossy desk reflections and the paper's
+        # own edge shadow otherwise bleed the bright region past the paper,
+        # putting desk/pen slivers inside the warp's border strips.
+        mask = cv2.morphologyEx(mask, cv2.MORPH_ERODE, np.ones((7, 7), np.uint8))
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         contours = sorted(contours, key=cv2.contourArea, reverse=True)
         for c in contours[:5]:
@@ -122,7 +126,7 @@ class PaperTracker:
         )
         if need_detect:
             quad = detect_paper(image, self.cfg.min_area_frac, self.cfg.min_brightness)
-            if quad is not None:
+            if quad is not None and self._accept_detect(quad, gray):
                 self.state = PaperState(
                     corners=quad,
                     homography=compute_homography(quad, self.cfg.warp_width, self.cfg.warp_height),
@@ -185,6 +189,20 @@ class PaperTracker:
         if abs(cv2.contourArea(order_corners(out))) < 0.2 * self._frame_area():
             return None
         return order_corners(out)
+
+    def _accept_detect(self, quad: np.ndarray, gray: np.ndarray) -> bool:
+        """Gate full detections: while tracking is healthy, a re-detect must
+        either stay near the current quad or be unmistakably paper-white.
+
+        This is what rejects glossy-desk and partial-sheet quads that appear
+        while the hand/arm covers most of the paper (approxPolyDP happily
+        fits those, and their brightness passes the loose min_brightness)."""
+        if self.state is None:
+            return True
+        jump = np.linalg.norm(quad.astype(np.float32) - self.state.corners, axis=1)
+        if float(jump.max()) < self.cfg.max_detect_jump_px:
+            return True
+        return _quad_brightness(gray, quad) >= self.cfg.accept_brightness
 
     def _frame_area(self) -> float:
         if self._prev_gray is None:

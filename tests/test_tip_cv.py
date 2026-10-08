@@ -5,7 +5,7 @@ import pytest
 from paperpen.config import TipConfig
 from paperpen.track.tip_cv import detect_tip, looks_like_skin
 
-W, H = 800, 1000
+W, H = 900, 1000
 
 
 def paper() -> np.ndarray:
@@ -57,7 +57,7 @@ def test_detects_pen_tip():
 def test_detects_tip_any_angle():
     for angle in (0, 90, 180, 270, 200):
         img = paper()
-        expected = draw_pen(img, (400, 500), angle_deg=angle)
+        expected = draw_pen(img, (450, 500), angle_deg=angle)
         det = detect_tip(img, TipConfig())
         assert det is not None, f"missed at angle {angle}"
         err = np.hypot(det.x - expected[0], det.y - expected[1])
@@ -122,7 +122,7 @@ def test_confidence_gate():
 @pytest.mark.parametrize("angle", [0, 45, 90, 135, 180, 225, 270, 315])
 def test_tip_direction_across_shapes(length, width, taper, angle):
     img = paper()
-    expected = draw_pen(img, (400, 500), angle, length=length, width=width, taper=taper)
+    expected = draw_pen(img, (450, 500), angle, length=length, width=width, taper=taper)
     det = detect_tip(img, TipConfig())
     assert det is not None, f"missed len={length} ang={angle}"
     err = np.hypot(det.x - expected[0], det.y - expected[1])
@@ -231,3 +231,43 @@ def test_split_barrel_picks_nib_end():
     assert det is not None
     assert det.y > 700  # nib end, far below the flat cut
     assert det.body_end[1] < 700  # body direction back up the barrel
+
+
+# --- warp-border rejection (desk/pen slivers past an imperfect paper quad) ---
+
+
+def test_border_sliver_rejected():
+    """Dark strip hugging the warp edge: clipped by the border, never the nib."""
+    img = paper()
+    cv2.rectangle(img, (W - 8, 300), (W - 1, 700), (35, 35, 40), -1)
+    assert detect_tip(img, TipConfig()) is None
+
+
+def test_pen_running_off_border_rejected():
+    """Colourless barrel crossing the warp edge: no pen-colour evidence,
+    so the clipped blob is still dropped (desk/sliver behaviour)."""
+    img = paper()
+    draw_pen(img, (700, 500), 0, length=420)  # back end runs past W
+    assert detect_tip(img, TipConfig()) is None
+
+
+def test_colored_pen_crossing_border_rescued():
+    """Orange barrel running off the warp edge: pen evidence rescues it
+    (writing near the paper edge merges the pen with the arm past the border)."""
+    img = paper()
+    expected = draw_pen(img, (700, 500), 0, length=420, color=(40, 100, 255))
+    det = detect_tip(img, TipConfig())
+    assert det is not None
+    err = np.hypot(det.x - expected[0], det.y - expected[1])
+    assert err < 8.0, f"tip off by {err:.1f}px"
+    assert det.body_end[0] > det.x  # body back toward the hand, off the edge
+
+
+def test_uniform_colored_bar_crossing_border_rescued():
+    """Pen-evidence blob with no taper (barrel segment cut by the border):
+    colour is proof enough, so only the taper gate relaxes."""
+    img = paper()
+    cv2.rectangle(img, (760, 478), (950, 522), (40, 100, 255), -1)
+    det = detect_tip(img, TipConfig())
+    assert det is not None
+    assert 700 <= det.x <= 900  # reported on the bar, not elsewhere

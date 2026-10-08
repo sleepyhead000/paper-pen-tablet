@@ -138,6 +138,39 @@ def _score_contour(
     return confidence, det
 
 
+def _rescue_border_contour(
+    contour: np.ndarray, color: np.ndarray, gray: np.ndarray, cfg: TipConfig
+) -> tuple[float, TipDetection] | None:
+    """Border-clipped blob that still carries pen-colour evidence.
+
+    Writing near the paper edge merges the pen with the arm running off the
+    warp border, so the border rule would reject the real pen. Desk/shadow
+    slivers carry no red-blue contrast; a pen does (orange barrel, pink
+    marker). Score the evidence contour alone - the surrounding arm would
+    otherwise dominate the geometry and put the tip on the wrong end.
+    """
+    filled = np.zeros(gray.shape[:2], np.uint8)
+    cv2.drawContours(filled, [contour], -1, 255, -1)
+    b = color[..., 0].astype(np.int32)
+    r = color[..., 2].astype(np.int32)
+    evidence = (((r - b) > cfg.border_evidence_rb) & (filled > 0)).astype(np.uint8) * 255
+    if int(evidence.sum() // 255) < cfg.min_area_px:
+        return None
+    evidence = cv2.morphologyEx(evidence, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    e_contours, _ = cv2.findContours(evidence, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not e_contours:
+        return None
+    e_best = max(e_contours, key=cv2.contourArea)
+    conf, det = _score_contour(e_best, gray, cfg)
+    if det is None:
+        # Uniform barrel segment: the evidence colour is already pen proof,
+        # so only the taper gate (nib vs blunt end) may relax.
+        conf, det = _score_contour(e_best, gray, replace(cfg, min_taper_ratio=1.0))
+    if det is None:
+        return None
+    return conf, det
+
+
 def detect_tip(
     warped: np.ndarray, cfg: TipConfig | None = None
 ) -> TipDetection | None:
@@ -156,6 +189,7 @@ def detect_tip(
             cfg,
             min_area_px=max(1, int(cfg.min_area_px * scale * scale)),
             min_body_width_px=cfg.min_body_width_px * scale,
+            border_margin_px=cfg.border_margin_px * scale,
         )
     det = _detect_tip_scaled(warped, cfg)
     if det is None:
@@ -195,20 +229,42 @@ def _detect_tip_scaled(warped: np.ndarray, cfg: TipConfig) -> TipDetection | Non
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
+    # Blobs clipped by the warp border are desk/pen/hand slivers that leak in
+    # around an imperfect paper quad - with one exception: a blob that still
+    # carries pen-colour evidence is the real pen (arm runs off the paper when
+    # writing near an edge); everything else touching the border is dropped.
+    margin = float(cfg.border_margin_px)
+    h_img, w_img = gray.shape[:2]
+
+    def _touches_border(c: np.ndarray) -> bool:
+        pts = c.reshape(-1, 2)
+        return bool(
+            pts[:, 0].min() < margin
+            or pts[:, 0].max() >= w_img - margin
+            or pts[:, 1].min() < margin
+            or pts[:, 1].max() >= h_img - margin
+        )
+
     best: TipDetection | None = None
     best_score = 0.0
     for c in contours:
-        conf, det = _score_contour(c, gray, cfg)
-        if det is None or conf <= 0.0:
-            continue
-        if cfg.skin_reject:
-            filled = np.zeros(gray.shape[:2], np.uint8)
-            cv2.drawContours(filled, [c], -1, 255, -1)
-            region = filled > 0
-            # fraction, not mean color: fingers gripping the barrel must not
-            # veto the pen when the barrel still dominates the blob.
-            if region.any() and skin_fraction(color[region]) > cfg.skin_frac_max:
+        if _touches_border(c):
+            rescued = _rescue_border_contour(c, color, gray, cfg)
+            if rescued is None:
                 continue
+            conf, det = rescued
+        else:
+            conf, det = _score_contour(c, gray, cfg)
+            if det is None or conf <= 0.0:
+                continue
+            if cfg.skin_reject:
+                filled = np.zeros(gray.shape[:2], np.uint8)
+                cv2.drawContours(filled, [c], -1, 255, -1)
+                region = filled > 0
+                # fraction, not mean color: fingers gripping the barrel must not
+                # veto the pen when the barrel still dominates the blob.
+                if region.any() and skin_fraction(color[region]) > cfg.skin_frac_max:
+                    continue
         if conf > best_score:
             best_score = conf
             best = det
