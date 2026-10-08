@@ -53,8 +53,12 @@ class TipConfig:
     max_area_frac: float = 0.08
     min_aspect: float = 1.8  # fingers grip close to the tip: keep the gate low
     bin_threshold: int = 110
+    sat_threshold: int = 120  # saturation gate: colored barrel vs bluish-white paper
     skin_reject: bool = True
+    skin_frac_max: float = 0.6  # reject if this fraction of the blob is skin
     min_body_width_px: float = 12.0
+    min_solidity: float = 0.5  # area/(span*width): rejects sparse ink clusters
+    min_taper_ratio: float = 1.15  # ends must differ in width: kills margin lines
     min_confidence: float = 0.35
     detect_scale: float = 0.5  # run detection on a scaled warp (speed vs precision)
 

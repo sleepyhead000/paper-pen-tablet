@@ -26,8 +26,12 @@
     "max_area_frac": 0.08,
     "min_aspect": 1.8,
     "bin_threshold": 110,
+    "sat_threshold": 120,
     "skin_reject": true,
+    "skin_frac_max": 0.6,
     "min_body_width_px": 12.0,
+    "min_solidity": 0.5,
+    "min_taper_ratio": 1.15,
     "min_confidence": 0.35,
     "detect_scale": 0.5
   },

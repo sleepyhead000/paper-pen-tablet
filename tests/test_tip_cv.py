@@ -143,3 +143,91 @@ def test_looks_like_skin():
     assert not looks_like_skin(np.array([200, 200, 200]))  # gray
     assert not looks_like_skin(np.array([40, 40, 200]))  # blue-ish red? BGR blue-ish
     assert not looks_like_skin(np.array([30, 30, 30]))  # pen color
+
+
+# --- non-paper mask / solidity / skin fraction (real-scene regressions) ---
+
+
+def test_orange_pen_detected():
+    """Bright colored barrel: gray ~140 so the old dark mask missed it."""
+    img = paper()
+    expected = draw_pen(img, (250, 300), 35, color=(40, 100, 255))  # orange
+    det = detect_tip(img, TipConfig())
+    assert det is not None
+    err = np.hypot(det.x - expected[0], det.y - expected[1])
+    assert err < 8.0, f"tip off by {err:.1f}px"
+
+
+def _draw_text_cluster(img, origin=(100, 400), n=6):
+    """Matra-joined word: long thin connected strokes, wide but sparse."""
+    x0, y0 = origin
+    cv2.line(img, (x0, y0), (x0 + 400, y0 - 10), (30, 30, 60), 4)  # headline
+    for i in range(n):
+        x = x0 + 30 + i * 60
+        cv2.line(img, (x, y0), (x + 6, y0 + 42), (30, 30, 60), 4)
+        cv2.line(img, (x, y0 + 20), (x + 30, y0 + 6), (30, 30, 60), 4)
+    cv2.line(img, (x0 + 40, y0 + 55), (x0 + 70, y0 + 40), (30, 30, 60), 5)
+
+
+def test_handwriting_cluster_rejected():
+    img = paper()
+    _draw_text_cluster(img)
+    assert detect_tip(img, TipConfig()) is None
+
+
+def test_colored_pen_beats_handwriting():
+    img = paper()
+    _draw_text_cluster(img)
+    expected = draw_pen(img, (320, 620), 10, color=(40, 100, 255))
+    det = detect_tip(img, TipConfig())
+    assert det is not None
+    err = np.hypot(det.x - expected[0], det.y - expected[1])
+    assert err < 10.0, f"picked wrong object, tip off by {err:.1f}px"
+    assert det.confidence > 0.5
+
+
+def test_skin_fraction_values():
+    from paperpen.track.tip_cv import skin_fraction
+
+    skin = np.full((10, 10, 3), (90, 120, 160), np.uint8)
+    gray = np.full((10, 10, 3), (200, 200, 200), np.uint8)
+    assert skin_fraction(skin) == 1.0
+    assert skin_fraction(gray) == 0.0
+    mixed = np.concatenate([skin, gray], axis=1)
+    assert abs(skin_fraction(mixed) - 0.5) < 1e-6
+
+
+def test_finger_dominant_blob_rejected():
+    """Fingers gripping most of the barrel: skin dominates -> reject,
+    but the barrel alone must stay detectable with skin_reject off."""
+    img = paper()
+    draw_pen(img, (400, 500), 0, length=420, width=44, taper=44)  # dark pen
+    cv2.rectangle(img, (530, 478), (815, 522), (60, 90, 140), -1)  # finger
+    assert detect_tip(img, TipConfig(skin_reject=True)) is None
+    det = detect_tip(img, TipConfig(skin_reject=False))
+    assert det is not None
+    assert det.x < 460  # tip end still points at the real pen tip
+
+
+def test_uniform_bar_rejected():
+    """Bold margin rule / ruled line: solid and wide but no taper at ends."""
+    img = paper()
+    cv2.rectangle(img, (150, 490), (750, 504), (40, 40, 90), -1)  # uniform bar
+    assert detect_tip(img, TipConfig()) is None
+
+
+def test_split_barrel_picks_nib_end():
+    """White band splitting the barrel: the segment carrying the nib must
+    win, with direction pointing at the nib (not the flat cut end)."""
+    img = paper()
+    # upper barrel segment: flat at both ends (cut by the white band)
+    cv2.rectangle(img, (398, 300), (442, 480), (40, 100, 255), -1)
+    # lower segment ending in a nib cone
+    cv2.rectangle(img, (400, 540), (440, 700), (40, 100, 255), -1)
+    cv2.fillConvexPoly(
+        img, np.array([[420, 760], [440, 700], [400, 700]], np.int32), (60, 60, 65)
+    )
+    det = detect_tip(img, TipConfig())
+    assert det is not None
+    assert det.y > 700  # nib end, far below the flat cut
+    assert det.body_end[1] < 700  # body direction back up the barrel
